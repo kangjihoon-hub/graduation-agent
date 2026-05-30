@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 
 const requiredRules = {
   "인성체험교양": 5,
@@ -113,6 +113,50 @@ export default function App() {
   const [selectedId, setSelectedId] = useState("2021010");
   const [fileName, setFileName] = useState("sample_transcripts_10.csv");
 
+  const WEBHOOK_URL =
+  "https://eyk1994.app.n8n.cloud/webhook/graduation-check";
+
+const [apiResult, setApiResult] = useState(null);
+const [loading, setLoading] = useState(false);
+
+async function checkGraduation(studentId) {
+  setLoading(true);
+
+  try {
+    const response = await fetch(WEBHOOK_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        student_id: studentId,
+      }),
+    });
+
+    const data = await response.json();
+
+    console.log("n8n 응답:", data);
+
+    setApiResult(data);
+
+  } catch (error) {
+
+    console.error(error);
+
+    setApiResult({
+      error: "n8n 연결 실패",
+      message: error.message,
+    });
+  }
+
+  setLoading(false);
+}
+
+useEffect(() => {
+  checkGraduation(selectedId);
+}, []);
+  
+
   const student = sampleStudents.find((s) => s.id === selectedId);
   const result = useMemo(() => analyze(student), [student]);
 
@@ -159,7 +203,10 @@ export default function App() {
 
             <select
               value={selectedId}
-              onChange={(e) => setSelectedId(e.target.value)}
+              onChange={(e) => {
+  setSelectedId(e.target.value);
+  checkGraduation(e.target.value);
+}}
               style={styles.select}
             >
               {sampleStudents.map((s) => (
@@ -193,13 +240,27 @@ export default function App() {
           </div>
 
           <div style={styles.cardDark}>
-            <h2>AI 안내 메시지</h2>
-            <p>{aiMessage}</p>
-          </div>
+  <h2>n8n 응답 결과</h2>
 
+  {loading ? (
+    <p>Google Sheets 조회 중...</p>
+  ) : (
+    <pre
+      style={{
+        whiteSpace: "pre-wrap",
+        fontSize: "12px",
+        color: "white",
+      }}
+    >
+      {JSON.stringify(apiResult, null, 2)}
+    </pre>
+  )}
+</div>
           <div style={styles.card}>
             <h2>Webhook JSON Preview</h2>
-            <pre style={styles.pre}>{JSON.stringify(jsonPreview, null, 2)}</pre>
+            <pre style={styles.pre}>
+  {JSON.stringify(apiResult, null, 2)}
+</pre>
           </div>
         </section>
 
