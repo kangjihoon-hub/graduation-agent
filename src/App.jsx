@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
-import { CheckCircle2, XCircle, GraduationCap, BookOpen, BarChart3, User, AlertCircle, ChevronDown } from "lucide-react";
+import { CheckCircle2, XCircle, GraduationCap, BookOpen, User, AlertCircle, ChevronDown, Play, Loader } from "lucide-react";
+
+const WEBHOOK_URL = "https://eyk1994.app.n8n.cloud/webhook/graduation-check";
 
 // ─── 졸업 요건 정의 ───────────────────────────────────────────────────────────
 const requiredRules = {
@@ -67,24 +69,18 @@ const sampleStudents = [
 // ─── 분석 함수 ────────────────────────────────────────────────────────────────
 function analyze(student) {
   const earnedMap = Object.fromEntries(Object.keys(requiredRules).map(k => [k, 0]));
-
   student.courses.forEach(([, , category, credit]) => {
-    if (earnedMap[category] !== undefined) {
-      earnedMap[category] += Number(credit);
-    }
+    if (earnedMap[category] !== undefined) earnedMap[category] += Number(credit);
   });
-
   const rows = Object.entries(requiredRules).map(([category, required]) => {
     const earned = earnedMap[category];
     const lack = Math.max(required - earned, 0);
     return { category, required, earned, lack, status: lack === 0 ? "충족" : "미달" };
   });
-
   const missing = rows.filter(r => r.status === "미달");
   return { rows, missing, pass: missing.length === 0 };
 }
 
-// ─── 성적 → 색상 ──────────────────────────────────────────────────────────────
 function gradeColor(grade) {
   if (grade.startsWith("A")) return "#15803d";
   if (grade.startsWith("B")) return "#1d4ed8";
@@ -92,7 +88,6 @@ function gradeColor(grade) {
   return "#6b7280";
 }
 
-// ─── Progress Bar ─────────────────────────────────────────────────────────────
 function Bar({ earned, required }) {
   const pct = Math.min((earned / required) * 100, 100);
   return (
@@ -110,7 +105,10 @@ function Bar({ earned, required }) {
 export default function App() {
   const [selectedId, setSelectedId] = useState("2021010");
   const [fileName, setFileName] = useState(null);
-  const [tab, setTab] = useState("result");  // result | transcript | json
+  const [tab, setTab] = useState("result");
+  const [n8nLoading, setN8nLoading] = useState(false);
+  const [n8nResult, setN8nResult] = useState(null);
+  const [n8nError, setN8nError] = useState(null);
 
   const student = sampleStudents.find(s => s.id === selectedId) || sampleStudents[0];
   const result = useMemo(() => analyze(student), [student]);
@@ -134,6 +132,30 @@ export default function App() {
     transcript: student.courses,
   }, null, 2);
 
+  // ─── n8n Webhook 호출 ─────────────────────────────────────────────────────
+  const runN8n = async () => {
+    setN8nLoading(true);
+    setN8nResult(null);
+    setN8nError(null);
+    try {
+      const res = await fetch(WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          student_id: student.id,
+          student_name: student.name,
+          student_email: student.email,
+        }),
+      });
+      const data = await res.json();
+      setN8nResult(data);
+    } catch (e) {
+      setN8nError("n8n 연결 실패: " + e.message);
+    } finally {
+      setN8nLoading(false);
+    }
+  };
+
   return (
     <div style={s.page}>
       {/* ── Header ── */}
@@ -155,11 +177,7 @@ export default function App() {
           <div style={s.card}>
             <div style={s.cardHeader}><User size={16} />&nbsp;학생 선택</div>
             <div style={{ position: "relative" }}>
-              <select
-                value={selectedId}
-                onChange={e => setSelectedId(e.target.value)}
-                style={s.select}
-              >
+              <select value={selectedId} onChange={e => { setSelectedId(e.target.value); setN8nResult(null); setN8nError(null); }} style={s.select}>
                 {sampleStudents.map(st => (
                   <option key={st.id} value={st.id}>{st.id} — {st.name}</option>
                 ))}
@@ -206,6 +224,41 @@ export default function App() {
             </div>
             <p style={{ fontSize: 13, color: "#334155", lineHeight: 1.7, margin: 0 }}>{aiMessage}</p>
           </div>
+
+          {/* n8n 실행 버튼 */}
+          <div style={s.card}>
+            <div style={s.cardHeader}>
+              <Play size={16} />&nbsp;n8n 워크플로우 실행
+            </div>
+            <p style={{ fontSize: 12, color: "#64748b", marginBottom: 14, marginTop: 0 }}>
+              Google Sheets 데이터 기반으로 분석 후 미달 시 이메일 자동 발송
+            </p>
+            <button onClick={runN8n} disabled={n8nLoading} style={{
+              ...s.runButton,
+              opacity: n8nLoading ? 0.7 : 1,
+              cursor: n8nLoading ? "not-allowed" : "pointer",
+            }}>
+              {n8nLoading
+                ? <><Loader size={15} style={{ animation: "spin 1s linear infinite" }} />&nbsp;실행 중...</>
+                : <><Play size={15} />&nbsp;졸업요건 검사 실행</>}
+            </button>
+
+            {/* 결과 표시 */}
+            {n8nResult && (
+              <div style={{ marginTop: 14, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#15803d", marginBottom: 6 }}>✓ n8n 응답 성공</div>
+                <pre style={{ fontSize: 11, color: "#334155", margin: 0, overflowX: "auto", whiteSpace: "pre-wrap" }}>
+                  {JSON.stringify(n8nResult, null, 2)}
+                </pre>
+              </div>
+            )}
+            {n8nError && (
+              <div style={{ marginTop: 14, background: "#fff1f2", border: "1px solid #fecdd3", borderRadius: 10, padding: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#dc2626", marginBottom: 4 }}>✗ 오류</div>
+                <div style={{ fontSize: 12, color: "#64748b" }}>{n8nError}</div>
+              </div>
+            )}
+          </div>
         </aside>
 
         {/* ── Right Panel ── */}
@@ -221,19 +274,16 @@ export default function App() {
                 </span>
               </div>
             </div>
-
             <div style={s.statCard}>
               <div style={s.statLabel}>이수 학점</div>
               <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{earnedTotal}<span style={{ fontSize: 14, color: "#94a3b8" }}>/{requiredTotal}</span></div>
               <Bar earned={earnedTotal} required={requiredTotal} />
             </div>
-
             <div style={s.statCard}>
               <div style={s.statLabel}>달성률</div>
               <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{progressPct}<span style={{ fontSize: 14, color: "#94a3b8" }}>%</span></div>
               <Bar earned={earnedTotal} required={requiredTotal} />
             </div>
-
             <div style={s.statCard}>
               <div style={s.statLabel}>미달 영역</div>
               <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6, color: result.missing.length > 0 ? "#dc2626" : "#15803d" }}>
@@ -244,7 +294,7 @@ export default function App() {
 
           {/* Tabs */}
           <div style={s.tabBar}>
-            {[["result","졸업요건 충족 현황"], ["transcript","성적증명서 데이터"], ["json","Webhook JSON"]].map(([key, label]) => (
+            {[["result", "졸업요건 충족 현황"], ["transcript", "성적증명서 데이터"], ["json", "Webhook JSON"]].map(([key, label]) => (
               <button key={key} style={{ ...s.tab, ...(tab === key ? s.tabActive : {}) }} onClick={() => setTab(key)}>
                 {label}
               </button>
@@ -269,9 +319,7 @@ export default function App() {
                       <td style={s.td}>{row.required}</td>
                       <td style={s.td}>{row.earned}</td>
                       <td style={{ ...s.td, color: row.lack > 0 ? "#dc2626" : "#94a3b8", fontWeight: row.lack > 0 ? 700 : 400 }}>{row.lack}</td>
-                      <td style={{ ...s.td, minWidth: 120 }}>
-                        <Bar earned={row.earned} required={row.required} />
-                      </td>
+                      <td style={{ ...s.td, minWidth: 120 }}><Bar earned={row.earned} required={row.required} /></td>
                       <td style={s.td}>
                         <span style={{
                           padding: "3px 10px", borderRadius: 99, fontSize: 11, fontWeight: 700,
@@ -319,10 +367,8 @@ export default function App() {
             <div style={s.card}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                 <span style={{ fontSize: 12, color: "#94a3b8" }}>n8n Webhook 전송 데이터 미리보기</span>
-                <button
-                  onClick={() => navigator.clipboard?.writeText(jsonPreview)}
-                  style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #e2e8f0", borderRadius: 8, cursor: "pointer", background: "#f8fafc" }}
-                >
+                <button onClick={() => navigator.clipboard?.writeText(jsonPreview)}
+                  style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #e2e8f0", borderRadius: 8, cursor: "pointer", background: "#f8fafc" }}>
                   복사
                 </button>
               </div>
@@ -331,96 +377,38 @@ export default function App() {
           )}
         </main>
       </div>
+
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
 const s = {
-  page: {
-    minHeight: "100vh",
-    background: "#f1f5f9",
-    padding: "20px",
-    fontFamily: "'Pretendard', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif",
-    color: "#0f172a",
-    boxSizing: "border-box",
-  },
-  header: {
-    background: "#0f172a",
-    borderRadius: 18,
-    padding: "18px 24px",
-    marginBottom: 20,
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
+  page: { minHeight: "100vh", background: "#f1f5f9", padding: "20px", fontFamily: "'Pretendard', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif", color: "#0f172a", boxSizing: "border-box" },
+  header: { background: "#0f172a", borderRadius: 18, padding: "18px 24px", marginBottom: 20, display: "flex", justifyContent: "space-between", alignItems: "center" },
   headerLeft: { display: "flex", gap: 16, alignItems: "center" },
-  logo: {
-    width: 48, height: 48,
-    background: "rgba(255,255,255,0.1)",
-    borderRadius: 14,
-    display: "flex", alignItems: "center", justifyContent: "center",
-  },
+  logo: { width: 48, height: 48, background: "rgba(255,255,255,0.1)", borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center" },
   title: { fontSize: 20, fontWeight: 800, color: "#fff", letterSpacing: -0.5 },
   subtitle: { fontSize: 12, color: "#94a3b8", marginTop: 2 },
   layout: { display: "grid", gridTemplateColumns: "340px 1fr", gap: 20, alignItems: "start" },
   aside: {},
   main: {},
-  card: {
-    background: "#fff",
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 16,
-    boxShadow: "0 1px 4px rgba(0,0,0,.06)",
-    border: "1px solid #e2e8f0",
-  },
+  card: { background: "#fff", borderRadius: 16, padding: 20, marginBottom: 16, boxShadow: "0 1px 4px rgba(0,0,0,.06)", border: "1px solid #e2e8f0" },
   cardHeader: { display: "flex", alignItems: "center", fontWeight: 700, fontSize: 13, marginBottom: 14, color: "#334155" },
-  select: {
-    width: "100%", padding: "10px 36px 10px 12px",
-    borderRadius: 10, border: "1px solid #e2e8f0",
-    fontSize: 13, background: "#f8fafc",
-    appearance: "none", cursor: "pointer",
-    outline: "none",
-  },
-  uploadBox: {
-    display: "flex", flexDirection: "column", alignItems: "center",
-    border: "2px dashed #cbd5e1", borderRadius: 12, padding: "24px 16px",
-    cursor: "pointer", background: "#f8fafc", gap: 4,
-  },
-  fileBox: {
-    marginTop: 12, padding: "10px 14px",
-    background: "#f1f5f9", borderRadius: 10,
-    display: "flex", flexDirection: "column", gap: 2,
-  },
+  select: { width: "100%", padding: "10px 36px 10px 12px", borderRadius: 10, border: "1px solid #e2e8f0", fontSize: 13, background: "#f8fafc", appearance: "none", cursor: "pointer", outline: "none" },
+  uploadBox: { display: "flex", flexDirection: "column", alignItems: "center", border: "2px dashed #cbd5e1", borderRadius: 12, padding: "24px 16px", cursor: "pointer", background: "#f8fafc", gap: 4 },
+  fileBox: { marginTop: 12, padding: "10px 14px", background: "#f1f5f9", borderRadius: 10, display: "flex", flexDirection: "column", gap: 2 },
   infoGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
-  infoBox: {
-    background: "#f8fafc", padding: "12px 14px",
-    borderRadius: 10, display: "flex", flexDirection: "column",
-  },
+  infoBox: { background: "#f8fafc", padding: "12px 14px", borderRadius: 10, display: "flex", flexDirection: "column" },
+  runButton: { width: "100%", padding: "12px", borderRadius: 12, border: "none", background: "#0f172a", color: "#fff", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 },
   statsGrid: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 16 },
-  statCard: {
-    background: "#fff", borderRadius: 16, padding: "16px 18px",
-    boxShadow: "0 1px 4px rgba(0,0,0,.06)", border: "1px solid #e2e8f0",
-  },
+  statCard: { background: "#fff", borderRadius: 16, padding: "16px 18px", boxShadow: "0 1px 4px rgba(0,0,0,.06)", border: "1px solid #e2e8f0" },
   statLabel: { fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 },
   tabBar: { display: "flex", gap: 4, marginBottom: 14 },
-  tab: {
-    padding: "8px 16px", borderRadius: 10, fontSize: 12, fontWeight: 600,
-    border: "none", cursor: "pointer", background: "#e2e8f0", color: "#64748b",
-    transition: "all .15s",
-  },
+  tab: { padding: "8px 16px", borderRadius: 10, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer", background: "#e2e8f0", color: "#64748b", transition: "all .15s" },
   tabActive: { background: "#0f172a", color: "#fff" },
   table: { width: "100%", borderCollapse: "collapse", fontSize: 13 },
-  th: {
-    background: "#f1f5f9", border: "1px solid #e2e8f0",
-    padding: "10px 12px", textAlign: "left", fontWeight: 700,
-    fontSize: 12, color: "#475569",
-  },
+  th: { background: "#f1f5f9", border: "1px solid #e2e8f0", padding: "10px 12px", textAlign: "left", fontWeight: 700, fontSize: 12, color: "#475569" },
   td: { border: "1px solid #e2e8f0", padding: "10px 12px" },
-  pre: {
-    background: "#0f172a", color: "#7dd3fc",
-    padding: 16, borderRadius: 12,
-    overflowX: "auto", fontSize: 11,
-    lineHeight: 1.7, margin: 0,
-  },
+  pre: { background: "#0f172a", color: "#7dd3fc", padding: 16, borderRadius: 12, overflowX: "auto", fontSize: 11, lineHeight: 1.7, margin: 0 },
 };
